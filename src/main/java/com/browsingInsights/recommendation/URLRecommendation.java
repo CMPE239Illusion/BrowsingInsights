@@ -95,7 +95,89 @@ public class URLRecommendation {
 				.mapToPair(line -> new Tuple2<>(line,1))
 				.reduceByKey((a,b)->a+b);
 		JavaRDD<String> output = counts.map(a -> a._1 + "," + a._2);
+		deleteDirectory();
 		output.saveAsTextFile("output");
+		
+		//user-based recommendation
+		BasicConfigurator.configure();
+		DataModel model = new FileDataModel(new File("output/part-00000"));
+		UserSimilarity similarity = new PearsonCorrelationSimilarity(model);
+		double threshold = -0.1;
+		UserNeighborhood neighborhood = new ThresholdUserNeighborhood(threshold, similarity, model);
+		UserBasedRecommender recommender = new GenericUserBasedRecommender(model, neighborhood, similarity);
 
+		MongoDatabase mDB = connectToMongo();
+		MongoCollection<Document> collection = mDB.getCollection("result");
+		MongoCollection<Document> urlCollection = mDB.getCollection("URLRepository");
+		
+		JSONObject userBrowsingRecord = null;
+		Bson updateFilter = null;
+		Bson updateResult = null;
+		Bson findUrlName = null;
+		Bson updateOperationDocument = null;
+		String userID = null;
+		int totalUrlsToRecommend = 2;
+		
+		for(Document rec : recordsList) {	
+			userBrowsingRecord = new JSONObject(rec.toJson());	
+			userID = userBrowsingRecord.get("user_id").toString();
+
+			List<RecommendedItem> recommendations = recommender.recommend(userID.hashCode(),totalUrlsToRecommend);
+
+			for (RecommendedItem recommendation : recommendations) {
+
+				updateFilter = new Document("user_id", userID);
+				findUrlName = new Document("URLId", recommendation.getItemID());
+				String urlname = urlCollection.find(findUrlName).first().getString("URLDomainName");
+				updateResult = new Document("recommended_urls", urlname);
+				updateOperationDocument = new Document("$addToSet", updateResult);
+				collection.updateOne(updateFilter, updateOperationDocument);
+			}
+		}
+		
+		sparkContextObject.close();
+
+	}
+	
+	private static MongoDatabase connectToMongo() {
+		MongoClient mongoClient = new MongoClient("localhost" , 27017);
+		MongoDatabase mDB = mongoClient.getDatabase("browsinghistory");
+		return mDB;	
+	}
+	
+	private static void deleteDirectory() {
+		File directory = new File("output");
+		if(directory.exists()){
+			try{
+				delete(directory);
+			}catch(IOException e){
+				e.printStackTrace();
+				System.exit(0);
+			}
+		}
+	}
+	
+	private static void delete(File file) throws IOException {
+		if(file.isDirectory()){
+			//directory is empty, then delete it
+			if(file.list().length==0){
+				file.delete();
+			} else {
+				String files[] = file.list();
+				for (String temp : files) {
+					//construct the file structure
+					File fileDelete = new File(file, temp);
+					//recursive delete
+					delete(fileDelete);
+				}
+				//check the directory again, if empty then delete it
+				if(file.list().length==0){
+					file.delete();
+				}
+			}
+		} else{
+			//if file, then delete it
+			file.delete();
+		}
 	}
 }
