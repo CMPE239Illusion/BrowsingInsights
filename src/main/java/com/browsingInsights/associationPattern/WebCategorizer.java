@@ -1,3 +1,4 @@
+package com.browsingInsights.associationPattern;
 import com.mongodb.client.MongoCollection;
 import jdk.nashorn.internal.parser.JSONParser;
 import org.json.JSONArray;
