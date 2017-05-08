@@ -1,5 +1,6 @@
 package com.browsingInsights.associationPattern;
 
+import com.browsingInsights.mongoConnector.MongoConnector;
 import com.mongodb.MongoClient;
 import com.mongodb.MongoClientURI;
 import com.mongodb.client.MongoCollection;
@@ -21,6 +22,7 @@ import java.util.*;
 public class BrowsingInsightsDriver {
 
     private static MongoClient mongoClient;
+    private static MongoConnector mongoConnector = new MongoConnector();
     private static HashMap<String, String> websiteCategoryMap;
     private static MongoCollection<Document> websiteCategoryCollection;
     private static MongoCollection<Document> previousDayHistoryCollection;
@@ -32,7 +34,8 @@ public class BrowsingInsightsDriver {
         try{
 
             // Get Users list from MongoDb
-            MongoDatabase mDB = connectToDB();
+            //MongoDatabase mDB = connectToDB();
+            MongoDatabase mDB = mongoConnector.connectToDB();
 
             // Retrieving Collection Name
             String cNameHistory = getYesterdayCollectionName(0);
@@ -67,7 +70,7 @@ public class BrowsingInsightsDriver {
         finally {
             // Save rules & url category count in MongoDb
             //previousDayResultCollection.insertMany(resultsRulesAndCategoryList);
-            disconnectDB();
+            mongoConnector.disconnectDB();
         }
     }
 
