@@ -17,7 +17,7 @@ import java.util.*;
  * Created by maverick on 5/1/17.
  */
 
-public class HomeClass {
+public class BrowsingInsightsDriver {
 
     private static MongoClient mongoClient;
     private static HashMap<String, String> websiteCategoryMap;
@@ -65,7 +65,7 @@ public class HomeClass {
         }
         finally {
             // Save rules & url category count in MongoDb
-            previousDayResultCollection.insertMany(resultsRulesAndCategoryList);
+            //previousDayResultCollection.insertMany(resultsRulesAndCategoryList);
             disconnectDB();
         }
     }
