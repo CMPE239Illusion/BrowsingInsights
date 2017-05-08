@@ -28,6 +28,7 @@ import org.bson.conversions.Bson;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
+import com.browsingInsights.mongoConnector.MongoConnector;
 import com.mongodb.MongoClient;
 import com.mongodb.client.MongoCollection;
 import com.mongodb.client.MongoDatabase;
@@ -51,7 +52,7 @@ public class URLRecommendation {
 		// Creating spark context object ( entry point for spark) 
 		JavaSparkContext sparkContextObject = new JavaSparkContext(sparkSessionObject.sparkContext());
 		JavaMongoRDD<Document> URLMappingRDD = MongoSpark.load(sparkContextObject);
-		
+
 		// Loading URL Repository collection
 		Map<String, String> readOverrides = new HashMap<String, String>();
 		readOverrides.put("collection", "h05062017");
@@ -76,14 +77,14 @@ public class URLRecommendation {
 				JSONObject chromeDataJSON = new JSONObject(host.toString());
 				String hostName = (String) chromeDataJSON.get("hostname");
 				try {
-				String query = "{$match : {URLDomain: \""+hostName+"\"}}";
-				List<Document> filteredURLRecords = Arrays.asList(Document.parse(query));
-				JavaMongoRDD<Document> aggregatedURLRDD = URLMappingRDD.withPipeline(filteredURLRecords);
-				List<Document> urlRecordsList = aggregatedURLRDD.collect();
-				JSONObject json1 = new JSONObject(urlRecordsList.get(0).toJson());	
-				Object ob1 = json1.get("URLId");			
-				int id = json.get("user_id").toString().hashCode();
-				userId_URL_List.add(id+","+ob1);
+					String query = "{$match : {URLDomain: \""+hostName+"\"}}";
+					List<Document> filteredURLRecords = Arrays.asList(Document.parse(query));
+					JavaMongoRDD<Document> aggregatedURLRDD = URLMappingRDD.withPipeline(filteredURLRecords);
+					List<Document> urlRecordsList = aggregatedURLRDD.collect();
+					JSONObject json1 = new JSONObject(urlRecordsList.get(0).toJson());	
+					Object ob1 = json1.get("URLId");			
+					int id = json.get("user_id").toString().hashCode();
+					userId_URL_List.add(id+","+ob1);
 				} catch (Exception e) {
 					System.out.println("Hostname::::" + hostName);
 				}
@@ -97,28 +98,28 @@ public class URLRecommendation {
 				.reduceByKey((a,b)->a+b);
 		JavaRDD<String> output = counts.map(a -> a._1 + "," + a._2);
 		deleteDirectory();
-		output.saveAsTextFile("output");
-		
+		output.saveAsTextFile("IntermediateResult");
+
 		//user-based recommendation
 		BasicConfigurator.configure();
-		DataModel model = new FileDataModel(new File("output/part-00000"));
+		DataModel model = new FileDataModel(new File("IntermediateResult/part-00000"));
 		UserSimilarity similarity = new PearsonCorrelationSimilarity(model);
 		double threshold = -0.1;
 		UserNeighborhood neighborhood = new ThresholdUserNeighborhood(threshold, similarity, model);
 		UserBasedRecommender recommender = new GenericUserBasedRecommender(model, neighborhood, similarity);
 
-		MongoDatabase mDB = connectToMongo();
-		MongoCollection<Document> collection = mDB.getCollection("result");
+		MongoDatabase mDB = MongoConnector.connectToDB();
+		MongoCollection<Document> collection = mDB.getCollection("r05062017");
 		MongoCollection<Document> urlCollection = mDB.getCollection("URLRepository");
-		
+
 		JSONObject userBrowsingRecord = null;
 		Bson updateFilter = null;
 		Bson updateResult = null;
 		Bson findUrlName = null;
 		Bson updateOperationDocument = null;
 		String userID = null;
-		int totalUrlsToRecommend = 2;
-		
+		int totalUrlsToRecommend = 10;
+
 		for(Document rec : recordsList) {	
 			userBrowsingRecord = new JSONObject(rec.toJson());	
 			userID = userBrowsingRecord.get("user_id").toString();
@@ -127,27 +128,20 @@ public class URLRecommendation {
 
 			for (RecommendedItem recommendation : recommendations) {
 				System.out.println("Recommendation:::" + recommendation.getItemID() + recommendation.getValue());
-//				updateFilter = new Document("user_id", userID);
-//				findUrlName = new Document("URLId", recommendation.getItemID());
-				//String urlname = urlCollection.find(findUrlName).first().getString("URLDomain");
-//				updateResult = new Document("recommended_urls", urlname);
-//				updateOperationDocument = new Document("$addToSet", updateResult);
-				//collection.updateOne(updateFilter, updateOperationDocument);
+				updateFilter = new Document("user_id", userID);
+				findUrlName = new Document("URLId", recommendation.getItemID());
+				String urlname = urlCollection.find(findUrlName).first().getString("URLDomain");
+				updateResult = new Document("recommended_urls", urlname);
+				updateOperationDocument = new Document("$addToSet", updateResult);
+				collection.updateOne(updateFilter, updateOperationDocument);
 			}
 		}
-		
+
 		sparkContextObject.close();
 
 	}
-	
-	private static MongoDatabase connectToMongo() {
-		MongoClient mongoClient = new MongoClient("localhost" , 27017);
-		MongoDatabase mDB = mongoClient.getDatabase("browsinghistory");
-		return mDB;	
-	}
-	
 	private static void deleteDirectory() {
-		File directory = new File("output");
+		File directory = new File("IntermediateResult");
 		if(directory.exists()){
 			try{
 				delete(directory);
@@ -157,7 +151,7 @@ public class URLRecommendation {
 			}
 		}
 	}
-	
+
 	private static void delete(File file) throws IOException {
 		if(file.isDirectory()){
 			//directory is empty, then delete it
