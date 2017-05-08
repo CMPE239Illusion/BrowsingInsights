@@ -55,6 +55,7 @@ public class BrowsingInsightsDriver {
                 ArrayList<JSONObject> rulesArray =  getRulesAndCategoryAnalysis(userChromeHistoryArray, categoryTimeArray);
                 resultsRulesAndCategoryList.add(new Document().parse(new JSONObject().put("user_id", userId).put("rules", rulesArray).put("categories", categoryTimeArray).toString()));
             }
+
             for(Document d : resultsRulesAndCategoryList){
                 System.out.println(d.toJson());
             }
@@ -69,16 +70,9 @@ public class BrowsingInsightsDriver {
         }
         finally {
             // Save rules & url category count in MongoDb
-            //previousDayResultCollection.insertMany(resultsRulesAndCategoryList);
+            previousDayResultCollection.insertMany(resultsRulesAndCategoryList);
             mongoConnector.disconnectDB();
         }
-    }
-
-    // Function to connect to Mongo
-    private static MongoDatabase connectToDB(){
-        MongoClientURI mongoClientURI = new MongoClientURI("mongodb://vaisham92:marias@ds131041.mlab.com:31041/history");
-        mongoClient = new MongoClient(mongoClientURI);
-        return mongoClient.getDatabase("history");
     }
 
     // Function to generate yesterday CollectionName
@@ -151,12 +145,18 @@ public class BrowsingInsightsDriver {
         Timestamp startTimestamp = new Timestamp(chromeHistoryUrlRecord.getLong("T1"));
         Timestamp endTimestamp = new Timestamp(chromeHistoryUrlRecord.getLong("T2"));
         int key = startTimestamp.getHours();
+        if(chromeHistoryUrlRecord.isNull("hostname")) {
+            System.out.println("HERE");
+            return;
+        }
         String url = chromeHistoryUrlRecord.getString("hostname");
+        if(url==null) return;
         Calendar cal = Calendar.getInstance();
         Calendar cal1 = Calendar.getInstance();
         cal.setTimeInMillis(startTimestamp.getTime());
         cal1.setTimeInMillis(endTimestamp.getTime());
         Timestamp tempTimestamp;
+        long timeDiff;
         while(startTimestamp.getHours() != endTimestamp.getHours()){
             Calendar cal2 = Calendar.getInstance();
             cal2.setTimeInMillis(startTimestamp.getTime());
@@ -164,38 +164,32 @@ public class BrowsingInsightsDriver {
             cal2.add(Calendar.SECOND, 59-startTimestamp.getSeconds());
             tempTimestamp = new Timestamp(cal2.getTime().getTime());
             key = startTimestamp.getHours();
-            if(userChromeHistoryMap.containsKey(key)){
-                JSONObject tempJSON = userChromeHistoryMap.get(key);
-                if(tempJSON.has(url)){
-                    tempJSON.put(url, (Long)tempJSON.get(url) + (tempTimestamp.getTime()-startTimestamp.getTime())/1000);
-                }
-                else{
-                    tempJSON.put(url, (tempTimestamp.getTime()-startTimestamp.getTime())/1000);
-                }
-            }
-            else{
-                JSONObject tempJSON = new JSONObject();
-                tempJSON.put(url, (tempTimestamp.getTime()-startTimestamp.getTime())/1000 );
-                userChromeHistoryMap.put(key, tempJSON);
-            }
+            timeDiff = (tempTimestamp.getTime()-startTimestamp.getTime())/1000;
+            addTransaction(userChromeHistoryMap, key, timeDiff, url);
             cal2.add(Calendar.SECOND, 1);
             startTimestamp = new Timestamp(cal2.getTime().getTime());
         }
         if(startTimestamp!=endTimestamp){
-            if(userChromeHistoryMap.containsKey(key)){
-                JSONObject tempJSON = userChromeHistoryMap.get(key);
-                if(tempJSON.has(url)){
-                    tempJSON.put(url, (Long)tempJSON.get(url) + (endTimestamp.getTime()-startTimestamp.getTime())/1000);
-                }
-                else{
-                    tempJSON.put(url, (endTimestamp.getTime()-startTimestamp.getTime())/1000);
-                }
+            timeDiff = (endTimestamp.getTime()-startTimestamp.getTime())/1000;
+            addTransaction(userChromeHistoryMap, key, timeDiff, url);
+        }
+    }
+
+    // Function to add Website to a transaction
+    private static void addTransaction(HashMap<Integer, JSONObject> userChromeHistoryMap, int key, long timeDiff, String url){
+        if(userChromeHistoryMap.containsKey(key)){
+            JSONObject tempJSON = userChromeHistoryMap.get(key);
+            if(tempJSON.has(url)){
+                tempJSON.put(url, (Long)tempJSON.get(url) + timeDiff);
             }
             else{
-                JSONObject tempJSON = new JSONObject();
-                tempJSON.put(url, (endTimestamp.getTime()-startTimestamp.getTime())/1000 );
-                userChromeHistoryMap.put(key, tempJSON);
+                tempJSON.put(url, timeDiff);
             }
+        }
+        else{
+            JSONObject tempJSON = new JSONObject();
+            tempJSON.put(url, timeDiff);
+            userChromeHistoryMap.put(key, tempJSON);
         }
     }
 
@@ -237,10 +231,4 @@ public class BrowsingInsightsDriver {
             if(tempTransaction.toString().length() != 0) transactionList.add(tempTransaction.toString());
         }
     }
-
-    // Function to disconnect from Mongo
-    private static void disconnectDB(){
-        mongoClient.close();
-    }
-
 }

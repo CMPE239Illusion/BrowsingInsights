@@ -26,12 +26,22 @@ class GenerateRules
 
         JavaRDD<List<String>> transactions = data.map(line -> Arrays.asList(line.split(" ")));
 
-        FPGrowth fpg = new FPGrowth().setMinSupport(0.5).setNumPartitions(10);
+        double minSupport = 0.50;
+
+        FPGrowth fpg = new FPGrowth().setMinSupport(0.50).setNumPartitions(10);
         FPGrowthModel<String> model = fpg.run(transactions);
 
-        double minConfidence = 0.8;
+        double minConfidence = 0.5;
         ArrayList<JSONObject> result = new ArrayList<>();
         List<AssociationRules.Rule<String>> rules = model.generateAssociationRules(minConfidence).toJavaRDD().collect();
+        minSupport = minSupport-0.10;
+        while(rules.size()==0 && minSupport>0){
+            fpg.setMinSupport(minSupport);
+            model = fpg.run(transactions);
+            clearRules(rules);
+            rules = model.generateAssociationRules(minConfidence).toJavaRDD().collect();
+            minSupport -= 0.10;
+        }
         int max = 0;
         for(AssociationRules.Rule<String> rule : rules){
             if(rule.javaAntecedent().size() > max){
@@ -49,5 +59,11 @@ class GenerateRules
         }
         sc.stop();
         return result;
+    }
+
+    private void clearRules(List<AssociationRules.Rule<String>> rules){
+        while(rules.size() > 0){
+            rules.remove(0);
+        }
     }
 }
