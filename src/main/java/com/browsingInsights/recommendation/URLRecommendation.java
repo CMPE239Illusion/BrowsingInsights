@@ -2,8 +2,11 @@ package com.browsingInsights.recommendation;
 
 import java.io.File;
 import java.io.IOException;
+import java.text.DateFormat;
+import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Calendar;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -29,7 +32,6 @@ import org.json.JSONArray;
 import org.json.JSONObject;
 
 import com.browsingInsights.mongoConnector.MongoConnector;
-import com.mongodb.MongoClient;
 import com.mongodb.client.MongoCollection;
 import com.mongodb.client.MongoDatabase;
 import com.mongodb.spark.MongoSpark;
@@ -53,9 +55,12 @@ public class URLRecommendation {
 		JavaSparkContext sparkContextObject = new JavaSparkContext(sparkSessionObject.sparkContext());
 		JavaMongoRDD<Document> URLMappingRDD = MongoSpark.load(sparkContextObject);
 
+		//Get yesterday's collection name to get the user browsing records
+		String inputCollectionName = getYesterdayCollectionName(0);
+
 		// Loading URL Repository collection
 		Map<String, String> readOverrides = new HashMap<String, String>();
-		readOverrides.put("collection", "h05062017");
+		readOverrides.put("collection", inputCollectionName);
 		readOverrides.put("readPreference.name", "secondaryPreferred");
 		ReadConfig readConfig = ReadConfig.create(sparkContextObject).withOptions(readOverrides);
 		JavaMongoRDD<Document> browsingHistoryRDD = MongoSpark.load(sparkContextObject,readConfig);
@@ -67,16 +72,16 @@ public class URLRecommendation {
 		JSONObject json;
 		JSONArray historyArray;
 		List<String> userId_URL_List = new ArrayList<String>();
-
+		String hostName = null;
 		// Data transformation 
 		for(Document doc : recordsList) {	
 			//To fetch single attribute in record
 			json =  new JSONObject(doc.toJson());
 			historyArray = (JSONArray) json.get("chromeHistory");
 			for (Object host : historyArray) {
-				JSONObject chromeDataJSON = new JSONObject(host.toString());
-				String hostName = (String) chromeDataJSON.get("hostname");
 				try {
+					JSONObject chromeDataJSON = new JSONObject(host.toString());
+					hostName = (String) chromeDataJSON.get("hostname");
 					String query = "{$match : {URLDomain: \""+hostName+"\"}}";
 					List<Document> filteredURLRecords = Arrays.asList(Document.parse(query));
 					JavaMongoRDD<Document> aggregatedURLRDD = URLMappingRDD.withPipeline(filteredURLRecords);
@@ -108,8 +113,12 @@ public class URLRecommendation {
 		UserNeighborhood neighborhood = new ThresholdUserNeighborhood(threshold, similarity, model);
 		UserBasedRecommender recommender = new GenericUserBasedRecommender(model, neighborhood, similarity);
 
+		//Get yesterday's collection name to store the recommended URL
+		String outputCollectionName = getYesterdayCollectionName(1);
+
+		//connecting to mongo database to store the recommendation results
 		MongoDatabase mDB = MongoConnector.connectToDB();
-		MongoCollection<Document> collection = mDB.getCollection("r05062017");
+		MongoCollection<Document> collection = mDB.getCollection(outputCollectionName);
 		MongoCollection<Document> urlCollection = mDB.getCollection("URLRepository");
 
 		JSONObject userBrowsingRecord = null;
@@ -127,7 +136,7 @@ public class URLRecommendation {
 			List<RecommendedItem> recommendations = recommender.recommend(userID.hashCode(),totalUrlsToRecommend);
 
 			for (RecommendedItem recommendation : recommendations) {
-				System.out.println("Recommendation:::" + recommendation.getItemID() + recommendation.getValue());
+				//System.out.println("Recommendation:::" + recommendation.getItemID() + recommendation.getValue());
 				updateFilter = new Document("user_id", userID);
 				findUrlName = new Document("URLId", recommendation.getItemID());
 				String urlname = urlCollection.find(findUrlName).first().getString("URLDomain");
@@ -140,6 +149,8 @@ public class URLRecommendation {
 		sparkContextObject.close();
 
 	}
+
+	//Method to delete the generated output folder
 	private static void deleteDirectory() {
 		File directory = new File("IntermediateResult");
 		if(directory.exists()){
@@ -174,5 +185,17 @@ public class URLRecommendation {
 			//if file, then delete it
 			file.delete();
 		}
+	}
+
+	//Method to get the collection name
+	private static String getYesterdayCollectionName(int i){
+		StringBuilder collectionName = new StringBuilder();
+		if(i==0) collectionName.append("h");
+		else collectionName.append("r");
+		Calendar cal = Calendar.getInstance();
+		cal.add(Calendar.DATE, -1);
+		DateFormat dF = new SimpleDateFormat("MM/dd/yyyy");
+		collectionName.append(dF.format(cal.getTime()).replace("/",""));
+		return collectionName.toString();
 	}
 }
