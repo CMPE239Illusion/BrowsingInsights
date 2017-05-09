@@ -14,14 +14,17 @@ import java.util.Map;
 import org.apache.log4j.BasicConfigurator;
 import org.apache.mahout.cf.taste.common.TasteException;
 import org.apache.mahout.cf.taste.impl.model.file.FileDataModel;
+import org.apache.mahout.cf.taste.impl.neighborhood.NearestNUserNeighborhood;
 import org.apache.mahout.cf.taste.impl.neighborhood.ThresholdUserNeighborhood;
 import org.apache.mahout.cf.taste.impl.recommender.GenericUserBasedRecommender;
 import org.apache.mahout.cf.taste.impl.similarity.PearsonCorrelationSimilarity;
+import org.apache.mahout.cf.taste.impl.similarity.UncenteredCosineSimilarity;
 import org.apache.mahout.cf.taste.model.DataModel;
 import org.apache.mahout.cf.taste.neighborhood.UserNeighborhood;
 import org.apache.mahout.cf.taste.recommender.RecommendedItem;
 import org.apache.mahout.cf.taste.recommender.UserBasedRecommender;
 import org.apache.mahout.cf.taste.similarity.UserSimilarity;
+import org.apache.mahout.math.hadoop.similarity.cooccurrence.measures.CosineSimilarity;
 import org.apache.spark.api.java.JavaPairRDD;
 import org.apache.spark.api.java.JavaRDD;
 import org.apache.spark.api.java.JavaSparkContext;
@@ -42,11 +45,11 @@ import com.mongodb.spark.rdd.api.java.JavaMongoRDD;
 import scala.Tuple2;
 
 public class URLRecommendation {
-	public static void main( String[] args ) throws InterruptedException, IOException, TasteException
+	public static void getRecommendations(MongoDatabase mDB) throws InterruptedException, IOException, TasteException
 	{
 		// Creating spark configuration 
 		SparkSession sparkSessionObject = SparkSession.builder()
-				.master("local")
+				.master("local[*]")
 				.appName("URLRecommendationComponent")
 				.config("spark.mongodb.input.uri", "mongodb://vaisham92:marias@ds131041.mlab.com:31041/history.URLRepository")
 				.getOrCreate();
@@ -73,6 +76,7 @@ public class URLRecommendation {
 		JSONArray historyArray;
 		List<String> userId_URL_List = new ArrayList<String>();
 		String hostName = null;
+
 		// Data transformation 
 		for(Document doc : recordsList) {	
 			//To fetch single attribute in record
@@ -96,7 +100,7 @@ public class URLRecommendation {
 			}
 		}
 
-		// Creating RDD
+		// Creating RDD - Map Reduce
 		JavaRDD<String> lines = sparkContextObject.parallelize(userId_URL_List);
 		JavaPairRDD<String,Integer> counts = lines
 				.mapToPair(line -> new Tuple2<>(line,1))
@@ -105,21 +109,10 @@ public class URLRecommendation {
 		deleteDirectory();
 		output.saveAsTextFile("IntermediateResult");
 
-		//user-based recommendation
-		BasicConfigurator.configure();
-		DataModel model = new FileDataModel(new File("IntermediateResult/part-00000"));
-		UserSimilarity similarity = new PearsonCorrelationSimilarity(model);
-		double threshold = -0.1;
-		UserNeighborhood neighborhood = new ThresholdUserNeighborhood(threshold, similarity, model);
-		UserBasedRecommender recommender = new GenericUserBasedRecommender(model, neighborhood, similarity);
-
 		//Get yesterday's collection name to store the recommended URL
 		String outputCollectionName = getYesterdayCollectionName(1);
 
-		//connecting to mongo database to store the recommendation results
-		MongoDatabase mDB = MongoConnector.connectToDB();
-		MongoCollection<Document> collection = mDB.getCollection(outputCollectionName);
-		MongoCollection<Document> urlCollection = mDB.getCollection("URLRepository");
+
 
 		JSONObject userBrowsingRecord = null;
 		Bson updateFilter = null;
@@ -128,21 +121,40 @@ public class URLRecommendation {
 		Bson updateOperationDocument = null;
 		String userID = null;
 		int totalUrlsToRecommend = 10;
+		String urlname = null;
+		int users = 4;
+
+		//user-based recommendation - Apache Mahout
+		BasicConfigurator.configure();
+		DataModel model = new FileDataModel(new File("IntermediateResult/part-00000"));
+		UserSimilarity similarity = new UncenteredCosineSimilarity(model);
+		UserNeighborhood neighborhood = new NearestNUserNeighborhood(users, similarity, model);
+		UserBasedRecommender recommender = new GenericUserBasedRecommender(model, neighborhood, similarity);
+
+		//connecting to mongo database to store the recommendation results
+		MongoCollection<Document> collection = mDB.getCollection(outputCollectionName);
+		MongoCollection<Document> urlCollection = mDB.getCollection("URLRepository");
 
 		for(Document rec : recordsList) {	
+			urlname = null;
 			userBrowsingRecord = new JSONObject(rec.toJson());	
 			userID = userBrowsingRecord.get("user_id").toString();
-
 			List<RecommendedItem> recommendations = recommender.recommend(userID.hashCode(),totalUrlsToRecommend);
 
-			for (RecommendedItem recommendation : recommendations) {
-				//System.out.println("Recommendation:::" + recommendation.getItemID() + recommendation.getValue());
+			if(recommendations.size() == 0) {
+				List<String> empty_url = new ArrayList<>();
 				updateFilter = new Document("user_id", userID);
-				findUrlName = new Document("URLId", recommendation.getItemID());
-				String urlname = urlCollection.find(findUrlName).first().getString("URLDomain");
-				updateResult = new Document("recommended_urls", urlname);
-				updateOperationDocument = new Document("$addToSet", updateResult);
-				collection.updateOne(updateFilter, updateOperationDocument);
+				collection.updateOne(updateFilter,new Document().parse(new JSONObject().put("recommended_urls", empty_url).toString()));
+			}
+			else{
+				for (RecommendedItem recommendation : recommendations) {
+					updateFilter = new Document("user_id", userID);
+					findUrlName = new Document("URLId", recommendation.getItemID());
+					urlname = urlCollection.find(findUrlName).first().getString("URLDomain");
+					updateResult = new Document("recommended_urls", urlname);
+					updateOperationDocument = new Document("$addToSet", updateResult);
+					collection.updateOne(updateFilter, updateOperationDocument);
+				}
 			}
 		}
 
