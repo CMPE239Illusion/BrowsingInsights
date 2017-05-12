@@ -49,7 +49,7 @@ public class URLRecommendation {
 	{
 		// Creating spark configuration 
 		SparkSession sparkSessionObject = SparkSession.builder()
-				.master("local[*]")
+				.master("local[1]")
 				.appName("URLRecommendationComponent")
 				.config("spark.mongodb.input.uri", "mongodb://vaisham92:marias@ds131041.mlab.com:31041/history.URLRepository")
 				.getOrCreate();
@@ -60,7 +60,6 @@ public class URLRecommendation {
 
 		//Get yesterday's collection name to get the user browsing records
 		String inputCollectionName = getYesterdayCollectionName(0);
-
 		// Loading URL Repository collection
 		Map<String, String> readOverrides = new HashMap<String, String>();
 		readOverrides.put("collection", inputCollectionName);
@@ -71,7 +70,8 @@ public class URLRecommendation {
 		JavaMongoRDD<Document> aggregatedBrowsingHistoryRDD = browsingHistoryRDD.withPipeline(filteredRecords);
 		List<Document> recordsList = aggregatedBrowsingHistoryRDD.collect();
 
-
+		MongoCollection<Document> urlCollection = mDB.getCollection("URLRepository");
+		
 		JSONObject json;
 		JSONArray historyArray;
 		List<String> userId_URL_List = new ArrayList<String>();
@@ -86,14 +86,18 @@ public class URLRecommendation {
 				try {
 					JSONObject chromeDataJSON = new JSONObject(host.toString());
 					hostName = (String) chromeDataJSON.get("hostname");
-					String query = "{$match : {URLDomain: \""+hostName+"\"}}";
-					List<Document> filteredURLRecords = Arrays.asList(Document.parse(query));
-					JavaMongoRDD<Document> aggregatedURLRDD = URLMappingRDD.withPipeline(filteredURLRecords);
-					List<Document> urlRecordsList = aggregatedURLRDD.collect();
-					JSONObject json1 = new JSONObject(urlRecordsList.get(0).toJson());	
-					Object ob1 = json1.get("URLId");			
+					
+					Bson urlId = new Document("URLDomain", hostName);
+					int url_id = urlCollection.find(urlId).first().getInteger("URLId");
+					
+//					String query = "{$match : {URLDomain: \""+hostName+"\"}}";
+//					List<Document> filteredURLRecords = Arrays.asList(Document.parse(query));
+//					JavaMongoRDD<Document> aggregatedURLRDD = URLMappingRDD.withPipeline(filteredURLRecords);
+//					List<Document> urlRecordsList = aggregatedURLRDD.collect();
+//					JSONObject json1 = new JSONObject(urlRecordsList.get(0).toJson());	
+//					Object ob1 = json1.get("URLId");			
 					int id = json.get("user_id").toString().hashCode();
-					userId_URL_List.add(id+","+ob1);
+					userId_URL_List.add(id+","+url_id);
 				} catch (Exception e) {
 					System.out.println("Hostname::::" + hostName);
 				}
@@ -111,8 +115,6 @@ public class URLRecommendation {
 
 		//Get yesterday's collection name to store the recommended URL
 		String outputCollectionName = getYesterdayCollectionName(1);
-
-
 
 		JSONObject userBrowsingRecord = null;
 		Bson updateFilter = null;
@@ -133,7 +135,7 @@ public class URLRecommendation {
 
 		//connecting to mongo database to store the recommendation results
 		MongoCollection<Document> collection = mDB.getCollection(outputCollectionName);
-		MongoCollection<Document> urlCollection = mDB.getCollection("URLRepository");
+		//MongoCollection<Document> urlCollection = mDB.getCollection("URLRepository");
 
 		for(Document rec : recordsList) {	
 			urlname = null;
@@ -141,21 +143,18 @@ public class URLRecommendation {
 			userID = userBrowsingRecord.get("user_id").toString();
 			List<RecommendedItem> recommendations = recommender.recommend(userID.hashCode(),totalUrlsToRecommend);
 
-			if(recommendations.size() == 0) {
-				List<String> empty_url = new ArrayList<>();
-				updateFilter = new Document("user_id", userID);
-				collection.updateOne(updateFilter,new Document().parse(new JSONObject().put("recommended_urls", empty_url).toString()));
-			}
-			else{
 				for (RecommendedItem recommendation : recommendations) {
+					try {
 					updateFilter = new Document("user_id", userID);
 					findUrlName = new Document("URLId", recommendation.getItemID());
 					urlname = urlCollection.find(findUrlName).first().getString("URLDomain");
 					updateResult = new Document("recommended_urls", urlname);
 					updateOperationDocument = new Document("$addToSet", updateResult);
 					collection.updateOne(updateFilter, updateOperationDocument);
+					} catch(Exception e) {
+						System.out.println("URLId" + recommendation.getItemID());
+					}
 				}
-			}
 		}
 
 		sparkContextObject.close();
